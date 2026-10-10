@@ -16,6 +16,7 @@ struct ProxyContext {
     TimerService& timer;
     Stats& stats;
     std::uint64_t seed = 0;
+    Duration connect_timeout = std::chrono::seconds(5);
 };
 
 }  // namespace chaos

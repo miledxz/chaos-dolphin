@@ -94,6 +94,7 @@ private:
     net::Fd upstream_;
     State state_ = State::Connecting;
     Clock::time_point started_;
+    Clock::time_point connect_deadline_{};
 
     Pipe up_, down_;
     Rng rng_;

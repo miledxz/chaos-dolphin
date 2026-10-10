@@ -9,6 +9,7 @@
 #include "chaos/rule_store.hpp"
 #include "core/stats.hpp"
 #include "core/timer_service.hpp"
+#include "util/clock.hpp"
 
 namespace chaos {
 
@@ -24,6 +25,7 @@ struct Config {
     std::string control = "127.0.0.1:9100";
     unsigned workers = 0;                 // 0 = hardware concurrency
     std::optional<std::uint64_t> seed;    // random if unset
+    Duration connect_timeout = std::chrono::seconds(5);  // give up on the upstream after this
     std::vector<std::string> rule_commands;  // e.g. "set latency 100ms", applied at startup
 };
 

@@ -60,6 +60,10 @@ void Session::start() {
         upstream_ = net::connect_nonblocking(worker_.ctx().upstream);
         worker_.poller().add(upstream_.get(), token(info_.id, kUpstreamSide), {.read = false, .write = true});
         upstream_interest_ = {.read = false, .write = true};
+        // A SYN that is silently dropped (e.g. a Service still routing to a deleted
+        // pod) would otherwise leave the client hanging for the kernel's ~2 minutes.
+        connect_deadline_ = Clock::now() + worker_.ctx().connect_timeout;
+        worker_.ctx().timer.schedule({connect_deadline_, worker_.index(), info_.id, Dir::Up});
     } catch (const std::exception& e) {
         Stats::add(worker_.ctx().stats.connect_failures);
         close(false, e.what());
@@ -100,7 +104,14 @@ void Session::on_event(int side, bool readable, bool writable) {
 }
 
 void Session::on_timer(Dir dir, Clock::time_point due) {
-    if (closed() || state_ != State::Open) return;
+    if (closed()) return;
+    if (state_ == State::Connecting) {
+        if (Clock::now() >= connect_deadline_) {
+            Stats::add(worker_.ctx().stats.connect_failures);
+            close(false, "upstream connect timed out after " + format_duration(worker_.ctx().connect_timeout));
+        }
+        return;
+    }
     Pipe& p = pipe(dir);
     if (p.timer_armed && due >= p.timer_due) p.timer_armed = false;
     flush(dir);
@@ -122,8 +133,11 @@ void Session::read_from(Dir dir) {
     if (p.src_eof || p.paused) return;
     refresh_faults();
 
-    std::vector<char> buf(read_cap(p.faults));
-    ssize_t n = ::recv(src_fd(dir), buf.data(), buf.size(), 0);
+    // Read into a reusable per-thread buffer and copy out exactly what arrived:
+    // a queued chunk must not pin a 64KB allocation for a few bytes of payload
+    // (and queued_bytes, which drives backpressure, must reflect real memory).
+    thread_local std::vector<char> scratch(kMaxRead);
+    ssize_t n = ::recv(src_fd(dir), scratch.data(), read_cap(p.faults), 0);
     if (n < 0) {
         if (would_block(errno) || errno == EINTR) return;
         // The peer reset (or similar): pass the reset on to the other side.
@@ -135,11 +149,9 @@ void Session::read_from(Dir dir) {
         flush(dir);  // sends FIN once everything queued has gone out
         return;
     }
-    buf.resize(static_cast<std::size_t>(n));
-
     auto& stats = worker_.ctx().stats;
     auto now = Clock::now();
-    Chunk chunk{std::move(buf), now};
+    Chunk chunk{std::vector<char>(scratch.data(), scratch.data() + n), now};
     StageContext ctx{p.faults, rng_, p.bucket, now};
     Stats::add(stats.chunks);
 
@@ -246,13 +258,14 @@ void Session::kill(bool rst, const char* reason) { close(rst, reason); }
 void Session::close(bool rst, const std::string& reason) {
     if (closed()) return;
     state_ = State::Closed;
+    // Update stats before the peers can observe the close.
+    Stats::add(worker_.ctx().stats.conns_active, static_cast<std::uint64_t>(-1));
     for (net::Fd* fd : {&client_, &upstream_}) {
         if (!fd->valid()) continue;
         worker_.poller().remove(fd->get());
         if (rst) net::set_linger_reset(fd->get());
         fd->reset();
     }
-    Stats::add(worker_.ctx().stats.conns_active, static_cast<std::uint64_t>(-1));
     log::info("conn {} {} {} (up {} down {})", info_.id, rst ? "reset" : "close", reason,
               format_bytes(up_.bytes), format_bytes(down_.bytes));
 }

@@ -22,7 +22,7 @@ Proxy::Proxy(const Config& config)
       }) {
     if (config.upstream.empty()) throw std::invalid_argument("an upstream address is required");
     ctx_ = std::make_unique<ProxyContext>(ProxyContext{
-        net::Address::resolve(config.upstream), rules_, timer_, stats_, seed_});
+        net::Address::resolve(config.upstream), rules_, timer_, stats_, seed_, config.connect_timeout});
     pool_ = std::make_unique<WorkerPool>(workers_, *ctx_);
     commands_ = std::make_unique<CommandProcessor>(rules_, *pool_, stats_, timer_);
 

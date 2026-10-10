@@ -1,0 +1,98 @@
+# dragonfly <- chaosproxy, each behind a ClusterIP Service, in namespace `chaos`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dragonfly
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: dragonfly}
+  template:
+    metadata:
+      labels: {app: dragonfly}
+    spec:
+      containers:
+        - name: dragonfly
+          image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.39.0
+          imagePullPolicy: IfNotPresent
+          args: ["--proactor_threads=2", "--maxmemory=512mb"]
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            tcpSocket: {port: 6379}
+            periodSeconds: 2
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 768Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dragonfly
+  namespace: chaos
+spec:
+  selector: {app: dragonfly}
+  ports:
+    - name: redis
+      port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaosproxy
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: chaosproxy}
+  template:
+    metadata:
+      labels: {app: chaosproxy}
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: chaosproxy
+          image: chaosproxy:dev
+          imagePullPolicy: Never   # loaded with `kind load docker-image`
+          args:
+            - --upstream=dragonfly.chaos.svc.cluster.local:6379
+            - --listen=0.0.0.0:6379
+            - --control=0.0.0.0:9100
+            - --workers=2
+            - --stats=30
+          ports:
+            - {name: redis, containerPort: 6379}
+            - {name: control, containerPort: 9100}
+          # Probe the control port: probing 6379 would open a proxied upstream connection every time.
+          readinessProbe:
+            tcpSocket: {port: control}
+            periodSeconds: 2
+          livenessProbe:
+            tcpSocket: {port: control}
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 50m, memory: 16Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chaosproxy
+  namespace: chaos
+spec:
+  selector: {app: chaosproxy}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+    - {name: control, port: 9100, targetPort: control}

@@ -1,6 +1,6 @@
-# chaosproxy
+# chaos-dolphin
 
-A TCP proxy that sits between a client and a server and injects latency, jitter,
+`chaosproxy` is a TCP proxy that sits between a client and a server and injects latency, jitter,
 packet-loss stalls, throttling, blackholes and connection resets, per connection
 and per direction. You can change the rules live while traffic is flowing. Use it
 to see how an app behaves on a bad network.
@@ -40,6 +40,32 @@ To build with sanitizers, use `-DCHAOS_SANITIZE=address` (ASan + UBSan) or
 ```
 
 `nc 127.0.0.1 9100` also gives you an interactive control session.
+
+## Docker and Kubernetes
+
+The `Dockerfile` compiles the proxy and runs the test suite. If any test fails,
+the image build fails. The resulting image is about 29 MB.
+
+`deploy/test/chaos_check.py` is an end-to-end check suite that uses only the
+Python standard library. It runs Redis-protocol traffic through the proxy, with
+Dragonfly as the upstream, and checks how each fault is observed.
+
+```sh
+# Docker Compose
+docker compose -f deploy/compose.yaml up -d --build dragonfly chaosproxy
+docker compose -f deploy/compose.yaml run --rm tester
+
+# kind
+kind create cluster --name chaosproxy
+kind load docker-image --name chaosproxy chaosproxy:dev
+kubectl apply -f deploy/k8s/stack.yaml
+kubectl -n chaos create configmap chaos-check --from-file=deploy/test/chaos_check.py
+kubectl apply -f deploy/k8s/tester-job.yaml && kubectl -n chaos logs -f job/chaos-check
+kubectl -n chaos exec deploy/chaosproxy -- chaosproxy ctl conns
+```
+
+`deploy/k8s/netpol-isolate-dragonfly.yaml` firewalls the upstream so SYNs are
+dropped, which exercises `--connect-timeout`.
 
 ## Faults
 

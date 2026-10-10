@@ -1,0 +1,23 @@
+# Runs deploy/test/chaos_check.py (mounted from the `chaos-check` ConfigMap) against the in-cluster Services.
+#   kubectl -n chaos create configmap chaos-check --from-file=deploy/test/chaos_check.py
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chaos-check
+  namespace: chaos
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: tester
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/test/chaos_check.py",
+                    "--proxy=chaosproxy:6379", "--direct=dragonfly:6379", "--control=chaosproxy:9100"]
+          volumeMounts:
+            - {name: script, mountPath: /test}
+      volumes:
+        - name: script
+          configMap: {name: chaos-check}

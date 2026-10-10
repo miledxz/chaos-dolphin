@@ -1,0 +1,12 @@
+# Firewalls the upstream: SYNs to dragonfly are dropped (not refused), so connects hang.
+# Used to test chaosproxy's --connect-timeout.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: isolate-dragonfly
+  namespace: chaos
+spec:
+  podSelector:
+    matchLabels: {app: dragonfly}
+  policyTypes: [Ingress]
+  ingress: []

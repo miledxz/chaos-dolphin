@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "chaos/rules.hpp"
 #include "core/proxy.hpp"
 #include "net/socket.hpp"
 #include "util/log.hpp"
@@ -28,6 +29,7 @@ options:
   --control HOST:PORT   control port for live rule changes (default 127.0.0.1:9100)
   --workers N           worker threads                    (default: CPU count)
   --seed N              RNG seed for repeatable fault decisions
+  --connect-timeout D   give up connecting to the upstream after D     (default 5s)
   --set "RULE"          rule to apply at startup, e.g. --set "latency 200ms jitter 50ms"
   --rules FILE          file of control commands to run at startup (one per line, # comments)
   --stats SECONDS       print a stats line every N seconds (default 0 = off)
@@ -86,6 +88,16 @@ int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
     if (!args.empty() && args[0] == "ctl") return run_ctl({args.begin() + 1, args.end()});
 
+    // Accept "--opt=value" as well as "--opt value".
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        auto eq = args[i].find('=');
+        if (args[i].starts_with("--") && eq != std::string::npos) {
+            args.insert(args.begin() + static_cast<std::ptrdiff_t>(i) + 1, args[i].substr(eq + 1));
+            args[i].resize(eq);
+            ++i;
+        }
+    }
+
     chaos::Config config;
     int stats_interval = 0;
 
@@ -104,6 +116,7 @@ int main(int argc, char** argv) {
             else if (a == "--control") config.control = value();
             else if (a == "--workers") config.workers = static_cast<unsigned>(std::stoul(value()));
             else if (a == "--seed") config.seed = std::stoull(value());
+            else if (a == "--connect-timeout") config.connect_timeout = chaos::parse_duration(value());
             else if (a == "--set") config.rule_commands.push_back("set " + value());
             else if (a == "--stats") stats_interval = std::stoi(value());
             else if (a == "-v" || a == "--verbose") chaos::log::set_level(chaos::log::Level::Debug);
@@ -117,7 +130,7 @@ int main(int argc, char** argv) {
                     config.rule_commands.push_back(line.substr(start));
                 }
             } else usage_error("unknown option " + a);
-        } catch (const std::logic_error&) {  // stoi & co.
+        } catch (const std::logic_error&) {  // stoi, parse_duration & co.
             usage_error("bad value for " + a);
         }
     }

@@ -304,6 +304,39 @@ TEST_CASE("proxy: dead upstream closes the client") {
     CHECK_EQ(Stats::get(proxy.stats().connect_failures), 1u);
 }
 
+TEST_CASE("proxy: upstream that never answers the SYN hits the connect timeout") {
+    // A listener whose accept queue is full silently drops new SYNs, like a
+    // Service still routing to a deleted pod: connect() just hangs.
+    auto full = net::listen_tcp(net::Address::resolve("127.0.0.1:0"), 1);  // 0 means "default" on macOS
+    auto addr = net::Address::resolve("127.0.0.1:" + std::to_string(net::local_port(full.get())));
+    std::vector<net::Fd> fillers;
+    for (int i = 0; i < 8; ++i) fillers.push_back(net::connect_nonblocking(addr));
+    std::this_thread::sleep_for(100ms);
+    {
+        auto probe = net::connect_nonblocking(addr);
+        pollfd pfd{probe.get(), POLLOUT, 0};
+        CHECK(::poll(&pfd, 1, 300) == 0);  // precondition: the SYN really is ignored
+    }
+
+    Config cfg;
+    cfg.listen = "127.0.0.1:0";
+    cfg.control = "";
+    cfg.upstream = addr.to_string();
+    cfg.workers = 1;
+    cfg.connect_timeout = 300ms;
+    Proxy proxy(cfg);
+    proxy.start();
+    auto fd = net::connect_blocking(net::Address::resolve("127.0.0.1:" + std::to_string(proxy.listen_port())));
+    Harness::set_recv_timeout(fd.get(), 5000);
+    auto t0 = Clock::now();
+    send_all(fd.get(), "ping");
+    CHECK(sees_close(fd.get()));
+    auto waited = std::chrono::duration_cast<Millis>(Clock::now() - t0).count();
+    CHECK(waited >= 250 && waited < 1500);
+    CHECK_EQ(Stats::get(proxy.stats().connect_failures), 1u);
+    CHECK_EQ(Stats::get(proxy.stats().conns_active), 0u);
+}
+
 TEST_CASE("control: TCP protocol, conns and kill") {
     Harness h;
     auto client = h.connect();
