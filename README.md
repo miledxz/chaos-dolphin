@@ -125,3 +125,7 @@ Apple's libc++ lacks `std::jthread` and floating-point `from_chars`. This code u
   because reordering a raw TCP byte stream would only corrupt it.
 - **`--seed`:** it makes the per-chunk fault decisions repeatable, but chunk
   boundaries depend on timing, so whole runs are not bit-for-bit reproducible.
+
+## Learning guide
+
+See [docs/LEARNING.md](docs/LEARNING.md) for a walkthrough of every file, the architecture concepts, and the bugs found while testing.
